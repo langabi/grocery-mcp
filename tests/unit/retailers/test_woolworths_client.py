@@ -176,3 +176,57 @@ async def test_cart_read_fails_closed_without_delivery_context() -> None:
         client = WoolworthsClient(http, auth, config=config)
         with pytest.raises(RetailerProtocolError, match="delivery context"):
             await client.get_cart()
+
+
+@pytest.mark.asyncio
+async def test_saved_locations_normalize_only_operator_selection_fields() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v4/cart/checkout/savedAddresses"
+        return httpx.Response(
+            200,
+            json={
+                "savedAddresses": [
+                    {
+                        "nickname": "Home",
+                        "placesId": "place-1",
+                        "storeId": "store-1",
+                        "fullAddress": "private address must not be returned",
+                        "defaultAddress": True,
+                    }
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        locations = await make_client(http, valid_session()).get_saved_locations()
+
+    assert locations == [
+        {
+            "nickname": "Home",
+            "place_id": "place-1",
+            "store_id": "store-1",
+            "is_default": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_saved_locations_fall_back_to_legacy_endpoint() -> None:
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.endswith("/cart/checkout/savedAddresses"):
+            return httpx.Response(404, json={"error": "missing"})
+        return httpx.Response(
+            200,
+            json={"addresses": [{"name": "Office", "placeId": "p2", "store_id": "s2"}]},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        locations = await make_client(http, valid_session()).get_saved_locations()
+
+    assert paths == ["/v4/cart/checkout/savedAddresses", "/v4/addresses"]
+    assert locations == [
+        {"nickname": "Office", "place_id": "p2", "store_id": "s2", "is_default": False}
+    ]

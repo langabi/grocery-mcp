@@ -80,6 +80,17 @@ class WoolworthsClient:
         self._require_delivery_context()
         return _mapping(await self.wfs("GET", "/cartV2"), "cart response")
 
+    async def get_saved_locations(self) -> list[dict[str, Any]]:
+        """Return the minimum operator-visible fields needed to select a delivery context."""
+        try:
+            payload = await self.wfs("GET", "/cart/checkout/savedAddresses")
+            locations = _saved_locations(payload)
+        except RetailerProtocolError:
+            locations = []
+        if not locations:
+            locations = _saved_locations(await self.wfs("GET", "/addresses"))
+        return locations
+
     async def add_item(self, sku: str, quantity: int) -> None:
         self._require_delivery_context()
         await self.wfs(
@@ -203,3 +214,45 @@ def _list(value: Any, label: str) -> list[Any]:
     if not isinstance(value, list):
         raise RetailerProtocolError(f"{label} had an unexpected shape")
     return value
+
+
+def _saved_locations(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        raw_locations = payload
+    elif isinstance(payload, dict):
+        raw_locations = next(
+            (
+                value
+                for key in ("savedAddresses", "addresses", "items", "data")
+                if isinstance((value := payload.get(key)), list)
+            ),
+            [],
+        )
+    else:
+        raise RetailerProtocolError("Woolworths address response had an unexpected shape")
+
+    locations = []
+    for raw in raw_locations:
+        if not isinstance(raw, dict):
+            continue
+        place_id = raw.get("placeId") or raw.get("placesId")
+        store_id = raw.get("storeId") or raw.get("store_id")
+        if not isinstance(place_id, str) or not isinstance(store_id, str):
+            continue
+        locations.append(
+            {
+                "nickname": _optional_string(
+                    raw.get("nickname") or raw.get("name") or raw.get("shipToAddressName")
+                ),
+                "place_id": place_id,
+                "store_id": store_id,
+                "is_default": bool(
+                    raw.get("defaultAddress") or raw.get("isDefault") or raw.get("default")
+                ),
+            }
+        )
+    return locations
+
+
+def _optional_string(value: Any) -> str:
+    return value if isinstance(value, str) else ""
