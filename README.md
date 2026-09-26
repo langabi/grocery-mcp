@@ -65,11 +65,37 @@ uv run grocery-admin map-product milk sixty60 PRODUCT_ID --name "Preferred milk"
 
 Run `uv run grocery-admin --help` for complete usage.
 
+Those commands are for a local source checkout. For a Docker deployment, run the installed
+admin executable in the running service container from the directory containing the Compose file:
+
+```bash
+docker compose exec grocery-mcp grocery-admin --help
+docker compose exec grocery-mcp grocery-admin set-location sixty60 \
+  --latitude LAT --longitude LNG
+docker compose exec grocery-mcp grocery-admin login sixty60
+```
+
+Interactive login prompts appear in that terminal. Do not run `uv` inside the production container;
+the runtime image contains the installed `grocery-admin` command but intentionally does not contain
+the `uv` development tool.
+
 ## Docker
 
 ```bash
+cp docker-compose.example.yml docker-compose.yml
+cp .env.example .env
+chmod 600 .env
+# Set GROCERY_ENCRYPTION_KEY and the required retailer configuration in .env.
 docker build -t grocery-mcp .
-docker compose -f docker-compose.example.yml up -d
+docker compose up -d
+```
+
+The encryption key and current private-API client fingerprints must be configured before retailer
+authentication. See [the operations guide](docs/operations.md) for the required variables. Recreate
+the container after changing `.env` so the new environment is loaded:
+
+```bash
+docker compose up -d --force-recreate
 ```
 
 The Compose example exposes no host port. Hermes connects over the private Docker network at `http://grocery-mcp:8000/mcp`. `/app/state` is the only writable container path.

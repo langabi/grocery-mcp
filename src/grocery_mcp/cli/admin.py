@@ -11,6 +11,7 @@ from grocery_mcp.app import Application, build_application
 from grocery_mcp.config import Settings
 from grocery_mcp.domain.models import ConstraintLevel, Retailer
 from grocery_mcp.domain.preferences import CanonicalItem, ItemPreference, RetailerItemMapping
+from grocery_mcp.logging import configure_logging
 from grocery_mcp.retailers.woolworths.auth import WoolworthsCredentials
 
 
@@ -71,6 +72,7 @@ def _preferences(args: argparse.Namespace) -> list[ItemPreference]:
 
 async def _run(args: argparse.Namespace) -> None:
     settings = Settings()
+    configure_logging(settings.log_level)
     credentials = None
     if args.command == "login" and args.retailer == Retailer.WOOLWORTHS.value:
         email = args.email or settings.woolworths_email
