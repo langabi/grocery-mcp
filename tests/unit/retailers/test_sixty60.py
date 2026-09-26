@@ -17,6 +17,7 @@ from grocery_mcp.retailers.sixty60 import (
     Sixty60Config,
     Sixty60Session,
 )
+from grocery_mcp.retailers.sixty60.mapper import cart_from_payload
 
 BASES = {
     "bff_base_url": "https://bff.test",
@@ -54,6 +55,19 @@ def adapter_with_handler(
     http = httpx.AsyncClient(transport=handler)
     client = Sixty60Client(config(**config_values), http)
     return Sixty60Adapter(client, MemorySessionStore(stored_session), write_enabled=write_enabled)
+
+
+def test_cart_mapper_labels_a_missing_product_name_explicitly() -> None:
+    cart = cart_from_payload(
+        {
+            "id": "cart-1",
+            "lineItems": [
+                {"productId": "prod-1", "quantity": 1, "price": 10999, "priceFactor": 100}
+            ],
+        }
+    )
+
+    assert cart.items[0].name == "Product name unavailable (prod-1)"
 
 
 @pytest.mark.asyncio
@@ -203,6 +217,65 @@ async def test_cart_read_refuses_ambiguous_unpinned_carts() -> None:
     adapter = adapter_with_handler(httpx.MockTransport(route), stored_session=session(cart_id=None))
     with pytest.raises(RetailerProtocolError, match="ambiguous"):
         await adapter.get_cart()
+
+
+@pytest.mark.asyncio
+async def test_cart_read_enriches_missing_product_names_from_catalogue() -> None:
+    catalogue_lookups = 0
+
+    def route(request: httpx.Request) -> httpx.Response:
+        nonlocal catalogue_lookups
+        if request.url.path == "/api/v3/store-contexts":
+            return httpx.Response(200, json={"items": [{"storeId": "store-1"}]})
+        if request.url.path == "/api/v3/products/product-list-page":
+            catalogue_lookups += 1
+            body = json.loads(request.content)
+            assert body["filter"]["productListSource"] == {"productIds": ["prod-1"]}
+            return httpx.Response(
+                200,
+                json={
+                    "products": [
+                        {
+                            "id": "prod-1",
+                            "name": "Jacobs Kronung Instant Coffee 200g",
+                            "priceWithoutDecimal": 10999,
+                            "priceFactor": 100,
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/api/v2/carts/user":
+            return httpx.Response(
+                200,
+                json={
+                    "carts": [
+                        {
+                            "item": {
+                                "id": "cart-1",
+                                "serviceOptionId": "sixty-min-delivery",
+                                "lineItems": [
+                                    {
+                                        "id": "line-1",
+                                        "productId": "prod-1",
+                                        "quantity": 1,
+                                        "price": 10999,
+                                        "priceFactor": 100,
+                                        "storeId": "store-1",
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                },
+            )
+        raise AssertionError(request.url)
+
+    adapter = adapter_with_handler(httpx.MockTransport(route), stored_session=session())
+    cart = await adapter.get_cart()
+
+    assert catalogue_lookups == 1
+    assert cart.items[0].name == "Jacobs Kronung Instant Coffee 200g"
+    assert cart.items[0].retailer_product_id == "prod-1"
 
 
 @pytest.mark.asyncio

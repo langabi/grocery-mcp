@@ -9,12 +9,17 @@ from grocery_mcp.domain.models import Retailer, RetailerCart, RetailerHealth, Re
 from grocery_mcp.retailers.base import (
     RetailerAdapter,
     RetailerAuthenticationError,
+    RetailerError,
     RetailerProtocolError,
     RetailerWriteDisabledError,
 )
 from grocery_mcp.retailers.sixty60.auth import OtpChallenge, SessionStore, Sixty60Session
 from grocery_mcp.retailers.sixty60.client import Sixty60Client
-from grocery_mcp.retailers.sixty60.mapper import cart_from_payload, product_from_payload
+from grocery_mcp.retailers.sixty60.mapper import (
+    cart_from_payload,
+    cart_product_ids_missing_names,
+    product_from_payload,
+)
 
 SERVICE_OPTION = "sixty-min-delivery"
 
@@ -203,7 +208,7 @@ class Sixty60Adapter(RetailerAdapter):
     async def get_cart(self) -> RetailerCart:
         session = await self._session()
         bundle = await self._read_cart_bundle(session, require_pinned=False)
-        return cart_from_payload(bundle.selected)
+        return await self._cart_from_bundle(session, bundle)
 
     async def add_to_cart(self, retailer_product_id: str, quantity: int) -> RetailerCart:
         if quantity <= 0:
@@ -330,14 +335,27 @@ class Sixty60Adapter(RetailerAdapter):
         session = await self.session_store.load()
         token = session.access_token if session else await self._bff_token()
         contexts = await self._store_contexts(session, token=token)
+        products = await self._lookup_products([product_id], session, token, contexts)
+        match = products.get(product_id)
+        if match is None:
+            raise RetailerProtocolError("Product is unavailable in the configured store context")
+        return match
+
+    async def _lookup_products(
+        self,
+        product_ids: list[str],
+        session: Sixty60Session | None,
+        token: str,
+        contexts: list[dict[str, Any]],
+    ) -> dict[str, RetailerProduct]:
         payload = await self.client.request_json(
             "POST",
             f"{self.client.config.catalog_base_url}/api/v3/products/product-list-page",
             headers=self._session_headers(session, token, _store_ids(contexts)),
             json={
                 "filter": {
-                    "productListSource": {"productIds": [product_id]},
-                    "paginationOptions": {"page": 0, "pageSize": 1},
+                    "productListSource": {"productIds": product_ids},
+                    "paginationOptions": {"page": 0, "pageSize": len(product_ids)},
                     "filterOptions": {},
                     "showNotRangedProducts": False,
                 },
@@ -350,13 +368,20 @@ class Sixty60Adapter(RetailerAdapter):
         products = payload.get("products")
         if not isinstance(products, list):
             raise RetailerProtocolError("Sixty60 product response has an unexpected shape")
-        match = next(
-            (item for item in products if isinstance(item, dict) and item.get("id") == product_id),
-            None,
-        )
-        if match is None:
-            raise RetailerProtocolError("Product is unavailable in the configured store context")
-        return product_from_payload(match)
+        mapped = [product_from_payload(item) for item in products if isinstance(item, dict)]
+        return {product.retailer_product_id: product for product in mapped}
+
+    async def _cart_from_bundle(self, session: Sixty60Session, bundle: _CartBundle) -> RetailerCart:
+        product_ids = cart_product_ids_missing_names(bundle.selected)
+        products: dict[str, RetailerProduct] = {}
+        if product_ids:
+            try:
+                products = await self._lookup_products(
+                    product_ids, session, session.access_token, bundle.store_contexts
+                )
+            except RetailerError:
+                pass
+        return cart_from_payload(bundle.selected, products)
 
     async def _read_cart_bundle(
         self, session: Sixty60Session, *, require_pinned: bool
@@ -484,7 +509,7 @@ class Sixty60Adapter(RetailerAdapter):
         actual = _line_quantity(verified.selected, product_id)
         if actual != target:
             raise RetailerProtocolError("Sixty60 cart write could not be verified")
-        return cart_from_payload(verified.selected)
+        return await self._cart_from_bundle(session, verified)
 
     def _require_auth_config(self) -> None:
         config = self.client.config

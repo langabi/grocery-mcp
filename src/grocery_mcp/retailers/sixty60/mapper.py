@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -40,7 +41,10 @@ def product_from_payload(payload: dict[str, Any]) -> RetailerProduct:
     )
 
 
-def cart_from_payload(payload: dict[str, Any]) -> RetailerCart:
+def cart_from_payload(
+    payload: dict[str, Any],
+    products: Mapping[str, RetailerProduct] | None = None,
+) -> RetailerCart:
     cart_id = payload.get("id")
     if not isinstance(cart_id, str) or not cart_id:
         raise RetailerProtocolError("Sixty60 cart response is missing a cart ID")
@@ -51,11 +55,12 @@ def cart_from_payload(payload: dict[str, Any]) -> RetailerCart:
     for raw in raw_lines:
         if not isinstance(raw, dict) or str(raw.get("status", "")).lower() == "removed":
             continue
-        nested = raw.get("product") if isinstance(raw.get("product"), dict) else {}
+        nested = _cart_line_product(raw)
         product_id = raw.get("productId") or nested.get("id")
         if not isinstance(product_id, str) or not product_id:
             raise RetailerProtocolError("Sixty60 cart line is missing a product ID")
-        name = raw.get("name") or nested.get("name") or nested.get("productName") or product_id
+        product = products.get(product_id) if products else None
+        name = _cart_line_name(raw) or (product.name if product else None)
         quantity = raw.get("quantity", 0)
         if not isinstance(quantity, int) or quantity < 0:
             raise RetailerProtocolError("Sixty60 cart line has an invalid quantity")
@@ -63,7 +68,7 @@ def cart_from_payload(payload: dict[str, Any]) -> RetailerCart:
             CartLine(
                 retailer_product_id=product_id,
                 retailer_line_id=raw.get("id") if isinstance(raw.get("id"), str) else None,
-                name=str(name),
+                name=name or f"Product name unavailable ({product_id})",
                 quantity=quantity,
                 unit_price=_money(raw.get("price", 0), raw.get("priceFactor", 100)),
             )
@@ -90,8 +95,41 @@ def cart_from_payload(payload: dict[str, Any]) -> RetailerCart:
     )
 
 
+def cart_product_ids_missing_names(payload: dict[str, Any]) -> list[str]:
+    raw_lines = payload.get("lineItems", [])
+    if not isinstance(raw_lines, list):
+        return []
+    return list(
+        dict.fromkeys(
+            product_id
+            for raw in raw_lines
+            if isinstance(raw, dict)
+            and str(raw.get("status", "")).lower() != "removed"
+            and not _cart_line_name(raw)
+            and isinstance(
+                product_id := raw.get("productId") or _cart_line_product(raw).get("id"), str
+            )
+            and product_id
+        )
+    )
+
+
 def _optional_bool(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
+
+
+def _cart_line_product(line: dict[str, Any]) -> dict[str, Any]:
+    for key in ("product", "productMinInfo", "productMinInfoAnnotation"):
+        value = line.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _cart_line_name(line: dict[str, Any]) -> str | None:
+    nested = _cart_line_product(line)
+    value = line.get("name") or nested.get("name") or nested.get("productName")
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def _first_string(payload: dict[str, Any], *keys: str) -> str | None:
