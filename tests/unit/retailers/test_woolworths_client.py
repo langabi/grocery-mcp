@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -229,4 +230,47 @@ async def test_saved_locations_fall_back_to_legacy_endpoint() -> None:
     assert paths == ["/v4/cart/checkout/savedAddresses", "/v4/addresses"]
     assert locations == [
         {"nickname": "Office", "place_id": "p2", "store_id": "s2", "is_default": False}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_saved_locations_resolve_missing_store_from_confirm_location() -> None:
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.endswith("/cart/checkout/savedAddresses"):
+            return httpx.Response(
+                200,
+                json={
+                    "addresses": [
+                        {"nickname": "Home", "placesId": "place-1", "verified": True}
+                    ],
+                    # The live API does not always match this value to the sole address nickname.
+                    "defaultAddressNickname": "Primary address",
+                },
+            )
+        assert request.method == "POST"
+        assert json.loads(request.content) == {
+            "address": {"nickname": "Home", "placeId": "place-1"},
+            "deliveryType": "OnDemand",
+            "page": "checkout",
+            "storeId": "",
+        }
+        return httpx.Response(200, json={"deliveryContext": {"storeId": "3162"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        locations = await make_client(http, valid_session()).get_saved_locations()
+
+    assert paths == [
+        "/v4/cart/checkout/savedAddresses",
+        "/v4/cartV2/confirmLocation",
+    ]
+    assert locations == [
+        {
+            "nickname": "Home",
+            "place_id": "place-1",
+            "store_id": "3162",
+            "is_default": True,
+        }
     ]

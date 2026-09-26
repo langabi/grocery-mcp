@@ -87,8 +87,47 @@ class WoolworthsClient:
             locations = _saved_locations(payload)
         except RetailerProtocolError:
             locations = []
-        if not locations:
-            locations = _saved_locations(await self.wfs("GET", "/addresses"))
+        if locations:
+            return await self._resolve_missing_store_id(locations)
+        return _saved_locations(await self.wfs("GET", "/addresses"))
+
+    async def _resolve_missing_store_id(
+        self, locations: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        missing = [index for index, location in enumerate(locations) if not location["store_id"]]
+        if not missing:
+            return locations
+
+        defaults = [index for index, location in enumerate(locations) if location["is_default"]]
+        if len(locations) == 1:
+            selected = 0
+        elif len(defaults) == 1 and missing == defaults:
+            selected = defaults[0]
+        else:
+            raise RetailerProtocolError(
+                "Woolworths saved locations did not identify one resolvable default store"
+            )
+
+        location = locations[selected]
+        response = await self.wfs(
+            "POST",
+            "/cartV2/confirmLocation",
+            json={
+                "address": {
+                    "nickname": location["nickname"],
+                    "placeId": location["place_id"],
+                },
+                "deliveryType": "OnDemand",
+                "page": "checkout",
+                "storeId": "",
+            },
+        )
+        store_ids = _store_ids(response)
+        if len(store_ids) != 1:
+            raise RetailerProtocolError(
+                "Woolworths location confirmation did not identify one store"
+            )
+        locations[selected] = {**location, "store_id": store_ids[0], "is_default": True}
         return locations
 
     async def add_item(self, sku: str, quantity: int) -> None:
@@ -231,24 +270,29 @@ def _saved_locations(payload: Any) -> list[dict[str, Any]]:
     else:
         raise RetailerProtocolError("Woolworths address response had an unexpected shape")
 
+    default_nickname = (
+        payload.get("defaultAddressNickname") if isinstance(payload, dict) else None
+    )
     locations = []
     for raw in raw_locations:
         if not isinstance(raw, dict):
             continue
         place_id = raw.get("placeId") or raw.get("placesId")
         store_id = raw.get("storeId") or raw.get("store_id")
-        if not isinstance(place_id, str) or not isinstance(store_id, str):
+        if not isinstance(place_id, str):
             continue
+        nickname = _optional_string(
+            raw.get("nickname") or raw.get("name") or raw.get("shipToAddressName")
+        )
         locations.append(
             {
-                "nickname": _optional_string(
-                    raw.get("nickname") or raw.get("name") or raw.get("shipToAddressName")
-                ),
+                "nickname": nickname,
                 "place_id": place_id,
-                "store_id": store_id,
+                "store_id": store_id if isinstance(store_id, str) else None,
                 "is_default": bool(
                     raw.get("defaultAddress") or raw.get("isDefault") or raw.get("default")
-                ),
+                )
+                or bool(default_nickname and nickname == default_nickname),
             }
         )
     return locations
@@ -256,3 +300,19 @@ def _saved_locations(payload: Any) -> list[dict[str, Any]]:
 
 def _optional_string(value: Any) -> str:
     return value if isinstance(value, str) else ""
+
+
+def _store_ids(value: Any) -> list[str]:
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"storeId", "store_id"} and isinstance(item, (str, int)):
+                rendered = str(item).strip()
+                if rendered:
+                    found.add(rendered)
+            else:
+                found.update(_store_ids(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.update(_store_ids(item))
+    return sorted(found)

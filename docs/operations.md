@@ -49,7 +49,9 @@ grocery-admin set-location woolworths --place-id PLACE_ID --store-id STORE_ID
 ```
 
 `list-locations` returns only the saved address nickname, default status, place ID, and store ID;
-it deliberately omits the full address payload. Verify the intended address before persisting its IDs.
+it deliberately omits the full address payload. When the saved-address response omits its store ID,
+the command confirms the sole or unambiguous default delivery location to resolve the serving store.
+Verify the intended address before persisting its IDs.
 
 Supply `GROCERY_WOOLWORTHS_EMAIL` and `GROCERY_WOOLWORTHS_PASSWORD` only to the trusted admin login process, or enter the password interactively:
 
