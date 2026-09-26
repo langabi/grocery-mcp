@@ -1,0 +1,41 @@
+[
+  {
+    "key": "milk",
+    "display_name": "Full cream milk 2L",
+    "default_quantity": 2,
+    "aliases": ["usual milk", "normal milk"],
+    "preferences": [
+      {"attribute": "name", "value": "full cream", "level": "must"},
+      {"attribute": "name", "value": "low fat", "level": "never"}
+    ]
+  },
+  {
+    "key": "bread",
+    "display_name": "Bread",
+    "default_quantity": 1,
+    "aliases": ["usual bread"],
+    "preferences": []
+  },
+  {
+    "key": "bananas",
+    "display_name": "Bananas",
+    "default_quantity": 1,
+    "aliases": ["usual bananas"],
+    "preferences": []
+  },
+  {
+    "key": "dog_food",
+    "display_name": "Dog food",
+    "default_quantity": 1,
+    "aliases": ["usual dog food"],
+    "preferences": []
+  },
+  {
+    "key": "dishwasher_tablets",
+    "display_name": "Dishwasher tablets",
+    "default_quantity": 1,
+    "aliases": ["usual dishwasher tablets"],
+    "preferences": []
+  }
+]
+

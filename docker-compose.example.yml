@@ -1,0 +1,39 @@
+# The MCP endpoint has no authentication of its own. Every container that can reach
+# port 8000 on either of these networks can call apply_cart_changes, so both networks
+# must hold only containers you trust with the household carts:
+#
+#   agent_internal  no route off the host; join Hermes to this one.
+#   egress          the route to the retailer APIs. Keep it to this service.
+#
+# The service name must stay grocery-mcp, or add the new name to GROCERY_ALLOWED_HOSTS:
+# a Host header that is not on that list is rejected with HTTP 421.
+services:
+  grocery-mcp:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    expose:
+      - "8000"
+    volumes:
+      - grocery_state:/app/state
+    networks:
+      - agent_internal
+      - egress
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  agent_internal:
+    internal: true
+  egress:
+
+volumes:
+  grocery_state:
+    name: grocery_mcp_state

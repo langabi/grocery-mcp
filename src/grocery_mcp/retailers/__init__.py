@@ -1,0 +1,1 @@
+"""Replaceable retailer adapters."""
