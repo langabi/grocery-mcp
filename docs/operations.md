@@ -43,13 +43,8 @@ If authentication fails, keep writes disabled, rerun `grocery-admin login sixty6
 Persist the verified Dash place and store identifiers before any authenticated cart call:
 
 ```bash
-grocery-admin login woolworths --email person@example.com
-grocery-admin list-locations woolworths
 grocery-admin set-location woolworths --place-id PLACE_ID --store-id STORE_ID
 ```
-
-`list-locations` returns only the saved address nickname, default status, place ID, and store ID;
-it deliberately omits the full address payload. Verify the intended address before persisting its IDs.
 
 Supply `GROCERY_WOOLWORTHS_EMAIL` and `GROCERY_WOOLWORTHS_PASSWORD` only to the trusted admin login process, or enter the password interactively:
 

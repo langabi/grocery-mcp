@@ -35,9 +35,6 @@ class WoolworthsAdapter(RetailerAdapter):
     async def get_cart(self) -> RetailerCart:
         return map_cart(await self.client.get_cart())
 
-    async def list_saved_locations(self) -> list[dict[str, object]]:
-        return await self.client.get_saved_locations()
-
     async def add_to_cart(self, retailer_product_id: str, quantity: int) -> RetailerCart:
         self._require_write()
         product_id = _product_id(retailer_product_id)
