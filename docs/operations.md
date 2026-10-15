@@ -63,6 +63,21 @@ The password is not persisted. The resulting Cognito Id/refresh tokens are encry
 
 If token refresh fails, rerun the admin login with credentials. Do not expose the admin command through Hermes.
 
+## Order-history verification
+
+Order history is read-only and does not require either retailer write flag. After authenticating an
+account that has at least one past order, inspect the normalized operator output:
+
+```bash
+grocery-admin orders sixty60 --limit 5
+grocery-admin orders woolworths --limit 5
+```
+
+Confirm order identifiers, dates, totals, and item prices against the retailer app. The output must
+not contain delivery addresses, phone/email fields, payment details, tokens, or unrecognized raw
+retailer fields. A protocol error means the private response shape needs a mapper fixture update;
+do not loosen validation or return the raw payload through MCP.
+
 ## Household preferences
 
 Create at least five canonical products and map their verified retailer IDs:
@@ -84,7 +99,8 @@ Retailer IDs still have to be mapped individually with `map-product`, against a 
 
 ## Health and incident handling
 
-`GET /health` is process liveness only and discloses no retailer state. The `retailer_health` MCP tool separates catalogue, authentication, cart-read, and cart-write readiness.
+`GET /health` is process liveness only and discloses no retailer state. The `retailer_health` MCP
+tool separates catalogue, authentication, cart-read, cart-write, and order-history readiness.
 
 On an adapter failure:
 

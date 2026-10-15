@@ -1,6 +1,6 @@
 # Implementation notes
 
-Updated: 2026-09-13
+Updated: 2026-09-28
 
 ## Decisions
 
@@ -43,6 +43,26 @@ Alembic is the only thing that creates or alters schema. The service runs `alemb
 - Pack sizes are parsed from common `2 L`, `500 g`, and multipack forms and normalized to litres/kilograms/items. Unparseable or dimensionally different results carry warnings rather than being presented as equivalent.
 - Catalogue price and stock are provisional until checked through the selected account/delivery context. Apply re-fetches each product and requires reconfirmation above the configured price-change threshold.
 
+### Order history
+
+- `list_orders` and `get_order` are read-only and require an authenticated retailer session.
+- Retailer payloads are normalized into a bounded order model. Delivery addresses, account fields,
+  payment data, tokens, and raw payloads are excluded from the MCP response.
+- Sixty60 uses its observed order-history endpoint; its response shape remains a
+  live-verification gate.
+- Woolworths lists orders from WFS `GET /order`, which returns `upcomingOrders` and `pastOrders`
+  (the 20 most recent; `totalOrderCount` can be higher) with state, total, item count and
+  `submittedDate`, but no line items. `submittedDate` is a `DD/MM/YYYY HH:MM:SS` South African
+  local time, and the list reports every time as `12:00:00`, so only the date is meaningful.
+- Woolworths `get_order` takes the state, total and date from the list entry and the line items
+  from `GET /order/{orderId}`. The detail payload's own summary is not used: its `completedDate`
+  is in a different date order, and its total and item count differ from the list entry's.
+- Woolworths cart and order lines carry prices in `priceInfo`. `listPrice` is the unit shelf
+  price; `amount` is the line total after discounts; `salePrice` is `0.0` for an item not on sale.
+- Sixty60 `get_order` selects from the history returned by the retailer rather than calling an
+  unverified detail endpoint. It can therefore return only the detail embedded in that history
+  response.
+
 ### Rate limits and anti-bot controls
 
 No documented limits were found. HTTP clients use explicit timeouts and classify 429/5xx as retailer unavailability. The service performs no blind retry of cart writes. A future deployment may add conservative read-only retry/backoff after measuring live behaviour.
@@ -67,4 +87,3 @@ Before enabling each retailer's write flag:
 5. Prepare one inexpensive item change and inspect it.
 6. Explicitly approve one add/set/remove round trip.
 7. Verify the original cart is restored and record any promotion/price effects.
-

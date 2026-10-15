@@ -20,6 +20,7 @@ from grocery_mcp.retailers.woolworths.auth import (
 from grocery_mcp.retailers.woolworths.client import WoolworthsClient, WoolworthsConfig
 from grocery_mcp.services.cart_service import CartService
 from grocery_mcp.services.comparison import ComparisonService
+from grocery_mcp.services.orders import OrderService
 from grocery_mcp.services.preferences import PreferenceService
 from grocery_mcp.services.registry import AdapterRegistry
 from grocery_mcp.services.search import SearchService
@@ -150,6 +151,7 @@ async def build_application(
         search=SearchService(adapters),
         comparison=ComparisonService(adapters, preference_service),
         preferences=preference_service,
+        orders=OrderService(adapters),
         carts=CartService(
             adapters,
             preference_service,

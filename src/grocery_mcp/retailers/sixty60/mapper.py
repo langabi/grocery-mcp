@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from grocery_mcp.domain.models import CartLine, Retailer, RetailerCart, RetailerProduct
+from grocery_mcp.domain.models import (
+    CartLine,
+    OrderLine,
+    Retailer,
+    RetailerCart,
+    RetailerOrder,
+    RetailerProduct,
+)
 from grocery_mcp.domain.products import extract_product_size
 from grocery_mcp.retailers.base import RetailerProtocolError
 
@@ -112,6 +120,115 @@ def cart_product_ids_missing_names(payload: dict[str, Any]) -> list[str]:
             and product_id
         )
     )
+
+
+def orders_from_payload(payload: dict[str, Any]) -> list[RetailerOrder]:
+    raw_orders = payload.get("inactiveOrderGroupSummaries")
+    if not isinstance(raw_orders, list):
+        raise RetailerProtocolError("Sixty60 order history had an unexpected shape")
+    return [order_from_payload(raw) for raw in raw_orders if isinstance(raw, dict)]
+
+
+def order_from_payload(raw: dict[str, Any]) -> RetailerOrder:
+    order_id = raw.get("id") or raw.get("orderId")
+    if not isinstance(order_id, (str, int)) or not str(order_id).strip():
+        raise RetailerProtocolError("Sixty60 order history entry is missing an order ID")
+    status = raw.get("reducedStatus") or raw.get("customerStatus") or raw.get("status")
+    if isinstance(status, dict):
+        status = status.get("orderStatus") or status.get("status")
+    if not isinstance(status, str) or not status.strip():
+        status = "unknown"
+
+    totals = raw.get("totals") if isinstance(raw.get("totals"), dict) else {}
+    raw_total = totals.get("totalPayable", raw.get("total"))
+    total = None
+    if raw_total is not None:
+        factor = totals.get("priceFactor", raw.get("priceFactor", 100))
+        total = _money(raw_total, factor)
+
+    lines = _order_lines(raw)
+    raw_count = raw.get("itemCount") or raw.get("numberOfItems")
+    item_count = (
+        raw_count if isinstance(raw_count, int) and not isinstance(raw_count, bool) else None
+    )
+    if item_count is None and lines:
+        item_count = sum(line.quantity for line in lines)
+
+    reference = raw.get("reference") or raw.get("orderNumber")
+    return RetailerOrder(
+        retailer=Retailer.SIXTY60,
+        order_id=str(order_id),
+        reference=str(reference) if isinstance(reference, (str, int)) else None,
+        status=status.strip(),
+        created_at=_timestamp(raw.get("createdOn") or raw.get("createdAt")),
+        total=total,
+        item_count=item_count,
+        items=lines,
+    )
+
+
+def _order_lines(order: dict[str, Any]) -> list[OrderLine]:
+    raw_lines = next(
+        (
+            value
+            for key in ("lineItems", "items", "orderItems")
+            if isinstance((value := order.get(key)), list)
+        ),
+        [],
+    )
+    lines: list[OrderLine] = []
+    for wrapper in raw_lines:
+        if not isinstance(wrapper, dict):
+            continue
+        raw = wrapper.get("item") if isinstance(wrapper.get("item"), dict) else wrapper
+        product = _cart_line_product(raw)
+        product_id = raw.get("productId") or product.get("id") or product.get("sku")
+        name = _cart_line_name(raw)
+        if not name:
+            if not isinstance(product_id, (str, int)):
+                raise RetailerProtocolError("Sixty60 order line is missing product details")
+            name = f"Product name unavailable ({product_id})"
+        quantity = raw.get("quantity", 1)
+        if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity < 0:
+            raise RetailerProtocolError("Sixty60 order line has an invalid quantity")
+        unit_price = None
+        if raw.get("price") is not None or raw.get("priceWithoutDecimal") is not None:
+            price = raw.get("priceWithoutDecimal", raw.get("price"))
+            unit_price = _money(price, raw.get("priceFactor", 100))
+        raw_line_total = raw.get("lineTotal") or raw.get("total")
+        line_total = (
+            _money(raw_line_total, raw.get("priceFactor", 100))
+            if raw_line_total is not None
+            else unit_price * quantity
+            if unit_price is not None
+            else None
+        )
+        lines.append(
+            OrderLine(
+                retailer_product_id=str(product_id) if isinstance(product_id, (str, int)) else None,
+                name=name,
+                quantity=quantity,
+                unit_price=unit_price,
+                line_total=line_total,
+            )
+        )
+    return lines
+
+
+def _timestamp(value: Any) -> datetime | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        seconds = value / 1000 if value >= 100_000_000_000 else value
+        try:
+            return datetime.fromtimestamp(seconds, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            raise RetailerProtocolError("Sixty60 order had an invalid timestamp") from None
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise RetailerProtocolError("Sixty60 order had an invalid timestamp") from None
+        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+    return None
 
 
 def _optional_bool(value: Any) -> bool | None:

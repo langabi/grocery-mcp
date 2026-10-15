@@ -21,6 +21,8 @@ async def test_mcp_server_negotiates_and_exposes_only_bounded_tools(tmp_path: Pa
                 "compare_products",
                 "compare_baskets",
                 "get_cart",
+                "list_orders",
+                "get_order",
                 "resolve_household_item",
                 "prepare_cart_changes",
                 "apply_cart_changes",

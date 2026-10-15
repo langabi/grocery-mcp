@@ -14,6 +14,8 @@ mcp_servers:
         - compare_products
         - compare_baskets
         - get_cart
+        - list_orders
+        - get_order
         - resolve_household_item
         - prepare_cart_changes
         - apply_cart_changes
@@ -32,12 +34,12 @@ Recommended Hermes instruction:
 ## Smoke test
 
 1. From the Hermes container, confirm `http://grocery-mcp:8000/health` returns `{"status":"ok"}`.
-2. Reload MCP and confirm all nine tools are discovered.
+2. Reload MCP and confirm all eleven tools are discovered.
 3. Call `retailer_health` and verify catalogue capability separately from cart capability.
 4. Search a product and confirm no retailer credential appears in Hermes logs/context.
-5. With writes disabled, ensure `apply_cart_changes` cannot mutate either cart.
-6. After the operator completes retailer verification and enables one write flag, run the exact prepare/show/approve/apply flow with one test item.
-7. Repeat that flow with `{"mode": "set", "quantity": 0}` and confirm the test item leaves the cart.
+5. List recent orders and confirm delivery, contact, payment, and raw retailer fields are absent.
+6. With writes disabled, ensure `apply_cart_changes` cannot mutate either cart.
+7. After the operator completes retailer verification and enables one write flag, run the exact prepare/show/approve/apply flow with one test item.
+8. Repeat that flow with `{"mode": "set", "quantity": 0}` and confirm the test item leaves the cart.
 
 Do not place retailer credentials, tokens, household coordinates, or the Grocery MCP encryption key in Hermes configuration.
-

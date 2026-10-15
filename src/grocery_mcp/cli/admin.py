@@ -36,10 +36,12 @@ def _parser() -> argparse.ArgumentParser:
     pin.add_argument("retailer", choices=[Retailer.SIXTY60.value])
     pin.add_argument("cart_id")
 
-    locations = commands.add_parser(
-        "list-locations", help="List saved retailer delivery contexts"
-    )
+    locations = commands.add_parser("list-locations", help="List saved retailer delivery contexts")
     locations.add_argument("retailer", choices=[Retailer.WOOLWORTHS.value])
+
+    orders = commands.add_parser("orders", help="List normalized read-only order history")
+    orders.add_argument("retailer", choices=[retailer.value for retailer in Retailer])
+    orders.add_argument("--limit", type=int, default=20)
 
     add_item = commands.add_parser("add-household-item", help="Create/update a canonical item")
     add_item.add_argument("key")
@@ -132,6 +134,11 @@ async def _dispatch(application: Application, args: argparse.Namespace) -> None:
     if args.command == "list-locations":
         locations = await application.woolworths.list_saved_locations()
         print(json.dumps(locations, indent=2))
+        return
+
+    if args.command == "orders":
+        orders = await application.services.orders.list_orders(Retailer(args.retailer), args.limit)
+        print(json.dumps([order.model_dump(mode="json") for order in orders], indent=2))
         return
 
     if args.command == "add-household-item":

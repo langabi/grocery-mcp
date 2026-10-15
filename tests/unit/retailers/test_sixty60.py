@@ -174,6 +174,68 @@ async def test_http_failures_are_typed_and_redact_body_and_token() -> None:
 
 
 @pytest.mark.asyncio
+async def test_order_history_is_normalized_without_private_account_fields() -> None:
+    def route(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/api/v2/orders/history"
+        return httpx.Response(
+            200,
+            json={
+                "inactiveOrderGroupSummaries": [
+                    {
+                        "id": "order-1",
+                        "reference": "S60-123",
+                        "reducedStatus": "delivered",
+                        "createdOn": 1_725_235_200_000,
+                        "totals": {"totalPayable": 4599, "priceFactor": 100},
+                        "lineItems": [
+                            {
+                                "productId": "prod-1",
+                                "name": "Milk 2L",
+                                "quantity": 1,
+                                "price": 4599,
+                                "priceFactor": 100,
+                            }
+                        ],
+                        "deliveryAddress": "must not be returned",
+                        "payment": {"card": "must not be returned"},
+                    }
+                ]
+            },
+        )
+
+    adapter = adapter_with_handler(httpx.MockTransport(route), stored_session=session())
+    orders = await adapter.list_orders()
+
+    assert len(orders) == 1
+    assert orders[0].order_id == "order-1"
+    assert orders[0].reference == "S60-123"
+    assert str(orders[0].total) == "45.99"
+    assert orders[0].items[0].name == "Milk 2L"
+    rendered = orders[0].model_dump_json()
+    assert "deliveryAddress" not in rendered
+    assert "payment" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_get_sixty60_order_accepts_reference_and_fails_for_unknown_order() -> None:
+    def route(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "inactiveOrderGroupSummaries": [
+                    {"id": "order-1", "reference": "S60-123", "customerStatus": "complete"}
+                ]
+            },
+        )
+
+    adapter = adapter_with_handler(httpx.MockTransport(route), stored_session=session())
+    assert (await adapter.get_order("S60-123")).order_id == "order-1"
+    with pytest.raises(KeyError):
+        await adapter.get_order("missing")
+
+
+@pytest.mark.asyncio
 async def test_write_is_disabled_by_default_before_any_network_call() -> None:
     called = False
 

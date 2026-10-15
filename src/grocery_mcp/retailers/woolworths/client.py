@@ -80,6 +80,14 @@ class WoolworthsClient:
         self._require_delivery_context()
         return _mapping(await self.wfs("GET", "/cartV2"), "cart response")
 
+    async def get_orders(self) -> Any:
+        """Fetch the order list: upcoming and past orders, without line items."""
+        return await self.wfs("GET", "/order")
+
+    async def get_order_detail(self, order_id: str) -> Any:
+        """Fetch one order with its line items."""
+        return await self.wfs("GET", f"/order/{quote(order_id, safe='')}")
+
     async def get_saved_locations(self) -> list[dict[str, Any]]:
         """Return the minimum operator-visible fields needed to select a delivery context."""
         try:
@@ -270,9 +278,7 @@ def _saved_locations(payload: Any) -> list[dict[str, Any]]:
     else:
         raise RetailerProtocolError("Woolworths address response had an unexpected shape")
 
-    default_nickname = (
-        payload.get("defaultAddressNickname") if isinstance(payload, dict) else None
-    )
+    default_nickname = payload.get("defaultAddressNickname") if isinstance(payload, dict) else None
     locations = []
     for raw in raw_locations:
         if not isinstance(raw, dict):

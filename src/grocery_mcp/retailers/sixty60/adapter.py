@@ -5,7 +5,13 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from grocery_mcp.domain.models import Retailer, RetailerCart, RetailerHealth, RetailerProduct
+from grocery_mcp.domain.models import (
+    Retailer,
+    RetailerCart,
+    RetailerHealth,
+    RetailerOrder,
+    RetailerProduct,
+)
 from grocery_mcp.retailers.base import (
     RetailerAdapter,
     RetailerAuthenticationError,
@@ -18,6 +24,7 @@ from grocery_mcp.retailers.sixty60.client import Sixty60Client
 from grocery_mcp.retailers.sixty60.mapper import (
     cart_from_payload,
     cart_product_ids_missing_names,
+    orders_from_payload,
     product_from_payload,
 )
 
@@ -210,6 +217,28 @@ class Sixty60Adapter(RetailerAdapter):
         bundle = await self._read_cart_bundle(session, require_pinned=False)
         return await self._cart_from_bundle(session, bundle)
 
+    async def list_orders(self, limit: int = 20) -> list[RetailerOrder]:
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        return (await self._all_orders())[:limit]
+
+    async def get_order(self, order_id: str) -> RetailerOrder:
+        order_id = order_id.strip()
+        if not order_id:
+            raise ValueError("order_id must not be empty")
+        orders = await self._all_orders()
+        match = next(
+            (
+                order
+                for order in orders
+                if order.order_id == order_id or order.reference == order_id
+            ),
+            None,
+        )
+        if match is None:
+            raise KeyError(order_id)
+        return match
+
     async def add_to_cart(self, retailer_product_id: str, quantity: int) -> RetailerCart:
         if quantity <= 0:
             raise ValueError("quantity must be positive")
@@ -250,10 +279,16 @@ class Sixty60Adapter(RetailerAdapter):
         session = await self.session_store.load()
         authenticated = session is not None
         cart_read = False
+        order_history = False
         if session:
             try:
                 await self._read_cart_bundle(session, require_pinned=False)
                 cart_read = True
+            except Exception as exc:
+                detail = type(exc).__name__
+            try:
+                await self._all_orders()
+                order_history = True
             except Exception as exc:
                 detail = type(exc).__name__
         return RetailerHealth(
@@ -262,6 +297,7 @@ class Sixty60Adapter(RetailerAdapter):
             authentication=authenticated,
             cart_read=cart_read,
             cart_write=cart_read and self.write_enabled and bool(session and session.cart_id),
+            order_history=order_history,
             detail=detail,
         )
 
@@ -275,6 +311,15 @@ class Sixty60Adapter(RetailerAdapter):
         if not isinstance(token, str) or not token:
             raise RetailerProtocolError("Sixty60 bootstrap response is missing a token")
         return token
+
+    async def _all_orders(self) -> list[RetailerOrder]:
+        session = await self._session()
+        payload = await self.client.request_json(
+            "GET",
+            f"{self.client.config.orders_base_url}/api/v2/orders/history",
+            headers=self._session_headers(session, session.access_token, session.store_ids),
+        )
+        return orders_from_payload(payload)
 
     async def _session(self) -> Sixty60Session:
         session = await self.session_store.load()

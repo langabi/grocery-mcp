@@ -20,14 +20,18 @@ def cart_payload(quantity: int | None = None) -> dict[str, Any]:
                     "catalogRefId": "600100",
                     "productDisplayName": "Ayrshire Full Cream Milk 2L",
                     "quantity": quantity,
-                    "price": 39.99,
-                }
+                },
+                "priceInfo": {
+                    "amount": quantity * 39.99,
+                    "listPrice": 39.99,
+                    "salePrice": 0.0,
+                },
             }
         ]
     return {
         "data": [
             {
-                "id": "cart-1",
+                "basketId": "cart-1",
                 "items": {"foodCommerceItem": lines},
                 "orderSummary": {"total": (quantity or 0) * 39.99},
             }
@@ -43,9 +47,16 @@ class StubAuth:
 
 
 class StubClient:
-    def __init__(self, carts: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        carts: list[dict[str, Any]] | None = None,
+        orders: dict[str, Any] | None = None,
+        order_details: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self.auth = StubAuth()
         self._carts: Iterator[dict[str, Any]] = iter(carts or [])
+        self._orders = orders or {"upcomingOrders": [], "pastOrders": []}
+        self._order_details = order_details or {}
         self.calls: list[tuple] = []
 
     async def search(self, query: str, limit: int) -> list[dict[str, Any]]:
@@ -63,11 +74,27 @@ class StubClient:
         ]
 
     async def product_detail(self, sku: str) -> dict[str, Any]:
-        return {"productDisplayName": "Milk 2L", "price": 39.99, "isInStock": True}
+        return {
+            "productId": sku,
+            "sku": sku,
+            "productName": "Ayrshire Full Cream Milk 2 L",
+            "brandText": "",
+            "price": "39.99",
+            "isnAvailable": "true",
+            "externalImageRefV2": "https://images.test/milk.jpg",
+        }
 
     async def get_cart(self) -> dict[str, Any]:
         self.calls.append(("get_cart",))
         return next(self._carts)
+
+    async def get_orders(self) -> dict[str, Any]:
+        self.calls.append(("get_orders",))
+        return self._orders
+
+    async def get_order_detail(self, order_id: str) -> dict[str, Any]:
+        self.calls.append(("get_order_detail", order_id))
+        return self._order_details[order_id]
 
     async def add_item(self, sku: str, quantity: int) -> None:
         self.calls.append(("add", sku, quantity))
@@ -95,12 +122,132 @@ async def test_maps_constructor_search_to_canonical_product() -> None:
 
 
 @pytest.mark.asyncio
+async def test_maps_product_detail_without_inventing_stock() -> None:
+    product = await WoolworthsAdapter(StubClient()).get_product(" 600100 ")  # type: ignore[arg-type]
+
+    assert product.retailer_product_id == "600100"
+    assert product.name == "Ayrshire Full Cream Milk 2 L"
+    assert str(product.price) == "39.99"
+    assert product.brand is None
+    assert product.in_stock is None
+    assert product.image_url == "https://images.test/milk.jpg"
+
+
+@pytest.mark.asyncio
 async def test_writes_are_disabled_by_default_before_any_cart_read() -> None:
     client = StubClient()
     adapter = WoolworthsAdapter(client)  # type: ignore[arg-type]
     with pytest.raises(RetailerWriteDisabledError):
         await adapter.add_to_cart("600100", 1)
     assert client.calls == []
+
+
+def order_summary(order_id: str, submitted: str, **overrides: Any) -> dict[str, Any]:
+    return {
+        "orderId": order_id,
+        "state": "DELIVERED",
+        "submittedDate": submitted,
+        "completedDate": submitted,
+        "total": 129.99,
+        "totalItemsCount": 3,
+        "deliveryType": "OnDemand",
+        "deliveryAddress": {"address1": "must not be returned"},
+        **overrides,
+    }
+
+
+def order_line(
+    product_id: str, name: str, quantity: int, list_price: float, amount: float
+) -> dict[str, Any]:
+    return {
+        "commerceItemInfo": {
+            "id": f"ci-{product_id}",
+            "catalogRefId": product_id,
+            "productDisplayName": name,
+            "quantity": quantity,
+        },
+        "priceInfo": {"amount": amount, "listPrice": list_price, "salePrice": 0.0},
+    }
+
+
+@pytest.mark.asyncio
+async def test_order_history_is_normalized_and_limited() -> None:
+    client = StubClient(
+        orders={
+            "upcomingOrders": [order_summary("o-3", "14/10/2026 12:00:00", state="PLACED")],
+            "pastOrders": [
+                order_summary("o-2", "11/10/2026 12:00:00"),
+                order_summary("o-1", "02/08/2026 12:00:00"),
+            ],
+            "totalOrderCount": 3,
+        }
+    )
+
+    orders = await WoolworthsAdapter(client).list_orders(limit=2)  # type: ignore[arg-type]
+
+    assert [order.order_id for order in orders] == ["o-3", "o-2"]
+    assert orders[0].status == "PLACED"
+    assert str(orders[1].total) == "129.99"
+    assert orders[1].item_count == 3
+    assert orders[1].created_at is not None
+    assert orders[1].created_at.isoformat() == "2026-10-11T12:00:00+02:00"
+    assert orders[1].items == []
+    assert "address" not in orders[1].model_dump_json()
+    assert client.calls == [("get_orders",)]
+
+
+@pytest.mark.asyncio
+async def test_order_history_rejects_an_unrecognised_date() -> None:
+    client = StubClient(orders={"pastOrders": [order_summary("o-1", "2026-10-11T12:00:00Z")]})
+
+    with pytest.raises(RetailerProtocolError):
+        await WoolworthsAdapter(client).list_orders()  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_get_order_takes_line_items_from_the_order_detail() -> None:
+    client = StubClient(
+        orders={"pastOrders": [order_summary("o-1", "11/10/2026 12:00:00")]},
+        order_details={
+            "o-1": {
+                "orderSummary": {"orderId": "o-1", "total": 999.99},
+                "items": {
+                    "food": [
+                        order_line("6001", "White Hamburger Rolls 6 pk", 2, 28.99, 57.98),
+                        order_line("6002", "Baby Spinach 100 g", 2, 19.99, 30.0),
+                        order_line("6003", "Substituted Chicken", 0, 167.9895, 0.0),
+                    ]
+                },
+            }
+        },
+    )
+
+    order = await WoolworthsAdapter(client).get_order(" o-1 ")  # type: ignore[arg-type]
+
+    assert str(order.total) == "129.99"
+    rolls, spinach, substituted = order.items
+    assert (rolls.retailer_product_id, rolls.quantity) == ("6001", 2)
+    assert (str(rolls.unit_price), str(rolls.line_total)) == ("28.99", "57.98")
+    assert (str(spinach.unit_price), str(spinach.line_total)) == ("19.99", "30.0")
+    assert substituted.quantity == 0
+    assert client.calls == [("get_orders",), ("get_order_detail", "o-1")]
+
+
+@pytest.mark.asyncio
+async def test_get_unknown_order_raises_key_error_without_detail_call() -> None:
+    client = StubClient(orders={"pastOrders": [order_summary("o-1", "11/10/2026 12:00:00")]})
+
+    with pytest.raises(KeyError):
+        await WoolworthsAdapter(client).get_order("o-404")  # type: ignore[arg-type]
+    assert client.calls == [("get_orders",)]
+
+
+@pytest.mark.asyncio
+async def test_cart_unit_price_is_the_list_price_not_the_line_amount() -> None:
+    cart = await WoolworthsAdapter(StubClient([cart_payload(2)])).get_cart()  # type: ignore[arg-type]
+
+    assert cart.cart_id == "cart-1"
+    assert str(cart.items[0].unit_price) == "39.99"
 
 
 @pytest.mark.asyncio
@@ -147,6 +294,7 @@ async def test_health_does_not_advertise_write_when_disabled() -> None:
     assert health.authentication is True
     assert health.cart_read is True
     assert health.cart_write is False
+    assert health.order_history is True
 
 
 @pytest.mark.parametrize("quantity", [0, -1, True, 1.5])

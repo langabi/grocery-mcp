@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from grocery_mcp.domain.models import Retailer, RetailerCart, RetailerHealth, RetailerProduct
+from grocery_mcp.domain.models import (
+    Retailer,
+    RetailerCart,
+    RetailerHealth,
+    RetailerOrder,
+    RetailerProduct,
+)
 from grocery_mcp.retailers.base import (
     RetailerAdapter,
     RetailerError,
@@ -11,6 +17,8 @@ from grocery_mcp.retailers.woolworths.client import WoolworthsClient
 from grocery_mcp.retailers.woolworths.mapper import (
     map_cart,
     map_constructor_product,
+    map_order_lines,
+    map_orders,
     map_product_detail,
 )
 
@@ -34,6 +42,23 @@ class WoolworthsAdapter(RetailerAdapter):
 
     async def get_cart(self) -> RetailerCart:
         return map_cart(await self.client.get_cart())
+
+    async def list_orders(self, limit: int = 20) -> list[RetailerOrder]:
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        return map_orders(await self.client.get_orders())[:limit]
+
+    async def get_order(self, order_id: str) -> RetailerOrder:
+        order_id = order_id.strip()
+        if not order_id:
+            raise ValueError("order_id must not be empty")
+        orders = map_orders(await self.client.get_orders())
+        match = next((order for order in orders if order.order_id == order_id), None)
+        if match is None:
+            raise KeyError(order_id)
+        # The list carries the delivered state, total and date; line items need the detail call.
+        items = map_order_lines(await self.client.get_order_detail(match.order_id))
+        return match.model_copy(update={"items": items})
 
     async def list_saved_locations(self) -> list[dict[str, object]]:
         return await self.client.get_saved_locations()
@@ -91,6 +116,7 @@ class WoolworthsAdapter(RetailerAdapter):
         catalogue = False
         authentication = False
         cart_read = False
+        order_history = False
         details: list[str] = []
         try:
             await self.search_products("milk", limit=1)
@@ -100,8 +126,16 @@ class WoolworthsAdapter(RetailerAdapter):
         try:
             if await self.client.auth.has_persisted_session() or self.client.auth.can_authenticate:
                 authentication = True
-                await self.get_cart()
-                cart_read = True
+                try:
+                    await self.get_cart()
+                    cart_read = True
+                except RetailerError as exc:
+                    details.append(type(exc).__name__)
+                try:
+                    await self.list_orders(limit=1)
+                    order_history = True
+                except RetailerError as exc:
+                    details.append(type(exc).__name__)
         except RetailerError as exc:
             authentication = False
             details.append(type(exc).__name__)
@@ -111,6 +145,7 @@ class WoolworthsAdapter(RetailerAdapter):
             authentication=authentication,
             cart_read=cart_read,
             cart_write=cart_read and self.write_enabled,
+            order_history=order_history,
             detail=", ".join(details) or None,
         )
 

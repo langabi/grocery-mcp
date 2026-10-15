@@ -128,11 +128,63 @@ class RetailerCart(BaseModel):
         return hashlib.sha256(encoded).hexdigest()
 
 
+class OrderLine(BaseModel):
+    retailer_product_id: str | None = None
+    name: str
+    quantity: int
+    unit_price: Decimal | None = None
+    line_total: Decimal | None = None
+    currency: Currency = Currency.ZAR
+
+    @field_validator("quantity")
+    @classmethod
+    def non_negative_order_quantity(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("quantity must not be negative")
+        return value
+
+    @field_validator("unit_price", "line_total")
+    @classmethod
+    def non_negative_optional_money(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value < 0:
+            raise ValueError("monetary values must not be negative")
+        return value
+
+
+class RetailerOrder(BaseModel):
+    """A privacy-bounded view of a completed or historical retailer order."""
+
+    retailer: Retailer
+    order_id: str
+    reference: str | None = None
+    status: str
+    created_at: datetime | None = None
+    total: Decimal | None = None
+    currency: Currency = Currency.ZAR
+    item_count: int | None = None
+    items: list[OrderLine] = Field(default_factory=list)
+
+    @field_validator("total")
+    @classmethod
+    def non_negative_order_total(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value < 0:
+            raise ValueError("order total must not be negative")
+        return value
+
+    @field_validator("item_count")
+    @classmethod
+    def non_negative_item_count(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("item count must not be negative")
+        return value
+
+
 class RetailerHealth(BaseModel):
     retailer: Retailer
     catalogue: bool
     authentication: bool
     cart_read: bool
     cart_write: bool
+    order_history: bool = False
     detail: str | None = None
     checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
