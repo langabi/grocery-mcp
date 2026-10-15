@@ -165,6 +165,38 @@ async def test_wfs_sends_explicit_delivery_context() -> None:
 
 
 @pytest.mark.asyncio
+async def test_order_history_uses_authenticated_read_only_endpoint() -> None:
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["token"] = request.headers["Sessiontoken"]
+        return httpx.Response(200, json={"upcomingOrders": [], "pastOrders": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        payload = await make_client(http, valid_session()).get_orders()
+
+    assert payload == {"upcomingOrders": [], "pastOrders": []}
+    assert seen == {"method": "GET", "path": "/v4/order", "token": "token"}
+
+
+@pytest.mark.asyncio
+async def test_order_detail_uses_the_quoted_order_id_in_the_path() -> None:
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.raw_path.decode()
+        return httpx.Response(200, json={"items": {}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await make_client(http, valid_session()).get_order_detail("o 1/2")
+
+    assert seen == {"method": "GET", "path": "/v4/order/o%201%2F2"}
+
+
+@pytest.mark.asyncio
 async def test_cart_read_fails_closed_without_delivery_context() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: None)) as http:
         config = WoolworthsConfig(wfs_base="https://wfs.test/v4")
@@ -243,9 +275,7 @@ async def test_saved_locations_resolve_missing_store_from_confirm_location() -> 
             return httpx.Response(
                 200,
                 json={
-                    "addresses": [
-                        {"nickname": "Home", "placesId": "place-1", "verified": True}
-                    ],
+                    "addresses": [{"nickname": "Home", "placesId": "place-1", "verified": True}],
                     # The live API does not always match this value to the sole address nickname.
                     "defaultAddressNickname": "Primary address",
                 },

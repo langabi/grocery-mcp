@@ -33,6 +33,7 @@ from grocery_mcp.services.cart_service import (
     ChangeSetStateError,
 )
 from grocery_mcp.services.comparison import ComparisonService
+from grocery_mcp.services.orders import OrderNotFoundError, OrderService
 from grocery_mcp.services.preferences import PreferenceService
 from grocery_mcp.services.registry import AdapterRegistry
 from grocery_mcp.services.search import SearchService
@@ -47,6 +48,7 @@ class Services:
     comparison: ComparisonService
     preferences: PreferenceService
     carts: CartService
+    orders: OrderService
 
 
 async def _safe[T](operation: Callable[[], Awaitable[T]]) -> T:
@@ -67,6 +69,8 @@ async def _safe[T](operation: Callable[[], Awaitable[T]]) -> T:
 def _error_details(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, ChangeSetNotFoundError):
         return "CHANGE_SET_NOT_FOUND", "The requested change set does not exist."
+    if isinstance(exc, OrderNotFoundError):
+        return "ORDER_NOT_FOUND", "The requested order was not found in available history."
     if isinstance(exc, RetailerAuthenticationError):
         return "AUTH_REQUIRED", "Retailer authentication is required."
     if isinstance(exc, RetailerWriteDisabledError):
@@ -150,6 +154,18 @@ def create_server(services: Services) -> MCPServer:
         return cart.model_dump(mode="json")
 
     @server.tool()
+    async def list_orders(retailer: Retailer, limit: int = 20) -> dict[str, Any]:
+        """List recent orders without exposing delivery, contact, or payment details."""
+        orders = await _safe(lambda: services.orders.list_orders(retailer, limit))
+        return {"orders": [order.model_dump(mode="json") for order in orders]}
+
+    @server.tool()
+    async def get_order(retailer: Retailer, order_id: str) -> dict[str, Any]:
+        """Get one order from the retailer's available history. This tool is read-only."""
+        order = await _safe(lambda: services.orders.get_order(retailer, order_id))
+        return order.model_dump(mode="json")
+
+    @server.tool()
     async def resolve_household_item(item: str, retailer: Retailer) -> dict[str, Any]:
         """Resolve an alias such as 'usual milk' to a preferred retailer product."""
         resolved = await _safe(lambda: services.preferences.resolve(item, retailer))
@@ -199,6 +215,7 @@ def create_server(services: Services) -> MCPServer:
                     authentication=False,
                     cart_read=False,
                     cart_write=False,
+                    order_history=False,
                     detail=f"health check failed ({type(result).__name__})",
                 )
                 if isinstance(result, BaseException)

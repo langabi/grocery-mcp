@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from grocery_mcp.domain.models import RetailerCart, RetailerHealth, RetailerProduct
+from grocery_mcp.domain.models import RetailerCart, RetailerHealth, RetailerOrder, RetailerProduct
 
 
 class RetailerError(RuntimeError):
@@ -34,6 +34,12 @@ class RetailerAdapter(ABC):
 
     @abstractmethod
     async def get_cart(self) -> RetailerCart: ...
+
+    @abstractmethod
+    async def list_orders(self, limit: int = 20) -> list[RetailerOrder]: ...
+
+    @abstractmethod
+    async def get_order(self, order_id: str) -> RetailerOrder: ...
 
     @abstractmethod
     async def add_to_cart(self, retailer_product_id: str, quantity: int) -> RetailerCart: ...

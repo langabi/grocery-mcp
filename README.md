@@ -1,6 +1,8 @@
 # Grocery MCP for Hermes
 
-A standalone, safety-first MCP service for searching South African grocery retailers, resolving household preferences, preparing cart proposals, and applying only previously persisted proposals after explicit approval.
+A standalone, safety-first MCP service for searching South African grocery retailers, reading
+normalized order history, resolving household preferences, preparing cart proposals, and applying
+only previously persisted proposals after explicit approval.
 
 Supported adapters:
 
@@ -57,6 +59,8 @@ Authentication and household preference changes are operator-only CLI operations
 ```bash
 uv run grocery-admin login sixty60
 uv run grocery-admin login woolworths
+uv run grocery-admin orders sixty60 --limit 5
+uv run grocery-admin orders woolworths --limit 5
 uv run grocery-admin set-location sixty60 --latitude LAT --longitude LNG
 uv run grocery-admin add-household-item milk --display-name Milk --quantity 2 --alias "usual milk"
 uv run grocery-admin import-household-items config/household-items.example.json

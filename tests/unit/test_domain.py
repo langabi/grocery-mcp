@@ -3,7 +3,7 @@ from decimal import Decimal
 import pytest
 
 from grocery_mcp.domain.change_sets import RequestedItem
-from grocery_mcp.domain.models import ProductSize, Retailer, RetailerProduct
+from grocery_mcp.domain.models import OrderLine, ProductSize, Retailer, RetailerProduct
 from grocery_mcp.domain.products import extract_product_size
 
 
@@ -16,6 +16,11 @@ def test_unit_price_uses_normalized_size() -> None:
         size=ProductSize(value=Decimal("2"), unit="L"),
     )
     assert product.unit_price == Decimal("20.00")
+
+
+def test_order_line_rejects_negative_values() -> None:
+    with pytest.raises(ValueError):
+        OrderLine(name="Milk", quantity=-1, unit_price=Decimal("10"))
 
 
 @pytest.mark.parametrize(
